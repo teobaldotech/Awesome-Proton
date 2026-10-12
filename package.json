@@ -1,32 +1,173 @@
-{
-  "name": "awesome-proton",
-  "version": "1.0.0",
-  "description": "List of games tested with Proton (Tool for Steam Client on Linux)",
-  "main": "build.js",
-  "scripts": {
-    "build": "node build.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/TiagoDanin/Awesome-Proton.git"
-  },
-  "keywords": [
-    "proton",
-    "awesome",
-    "awesome-list",
-    "steam",
-    "games",
-    "list"
-  ],
-  "author": "Tiago Danin",
-  "license": "CC0-1.0",
-  "bugs": {
-    "url": "https://github.com/TiagoDanin/Awesome-Proton/"
-  },
-  "homepage": "https://github.com/TiagoDanin/Awesome-Proton#readme",
-  "dependencies": {
-    "chokidar": "^3.4.2",
-    "load-json-file": "^6.2.0",
-    "mustache": "^4.2.0"
-  }
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+###############################################################################
+# Error Handling
+###############################################################################
+
+_err() {
+  local lineno="$1"
+  shift
+  printf 'ERROR [%s\]: %s\n' "$lineno" "$*" >&2
 }
+
+###############################################################################
+# Cleanup
+###############################################################################
+
+_cleanup_ran=0
+
+cleanup() {
+  (( _cleanup_ran )) && return
+  _cleanup_ran=1
+
+  printf 'Cleaning up...\n' >&2
+
+  # Marker file for automated tests.
+  if [[ -n "${TEST_MARKER_FILE:-}" ]]; then
+    touch "$TEST_MARKER_FILE"
+  fi
+
+  # Remove temporary directory.
+  if [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR}" ]]; then
+    rm -rf -- "$TMP_DIR"
+  fi
+
+  # Safely unwind directory stack.
+  while popd >/dev/null 2>&1; do
+    :
+  done
+}
+
+on_interrupt() {
+  local signal="$1"
+
+  printf '\nReceived %s. Aborting...\n' "$signal" >&2
+
+  cleanup
+
+  case "$signal" in
+    SIGINT)
+      exit 130
+      ;;
+    SIGTERM)
+      exit 143
+      ;;
+    *)
+      exit 1
+      ;;
+  esac
+}
+
+trap '_err "$LINENO" "Command failed: $BASH_COMMAND"' ERR
+trap 'on_interrupt SIGINT' INT
+trap 'on_interrupt SIGTERM' TERM
+trap cleanup EXIT
+
+###############################################################################
+# Utility Functions
+###############################################################################
+
+resolve_path() {
+  local p="$1"
+
+  if command -v realpath >/dev/null 2>&1; then
+    realpath "$p"
+    return
+  fi
+
+  if command -v readlink >/dev/null 2>&1; then
+    local resolved
+
+    if resolved="$(readlink -f "$p" 2>/dev/null)"; then
+      printf '%s\n' "$resolved"
+      return
+    fi
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY' "$p"
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+    return
+  fi
+
+  _err "$LINENO" "Unable to resolve path '$p'"
+  return 1
+}
+
+require_cmd() {
+  local cmd="$1"
+
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    _err "$LINENO" "Required command '$cmd' not found in PATH."
+    exit 2
+  fi
+}
+
+require_writable_parent() {
+  local path="$1"
+  local parent
+
+  parent="$(dirname "$path")"
+
+  if [[ ! -d "$parent" ]]; then
+    _err "$LINENO" "Parent directory does not exist: $parent"
+    exit 7
+  fi
+
+  if [[ ! -w "$parent" ]]; then
+    _err "$LINENO" "Directory is not writable: $parent"
+    exit 7
+  fi
+}
+
+###############################################################################
+# Paths
+###############################################################################
+
+readonly REPO_PATH="$(dirname "$(resolve_path "$0")")"
+
+readonly PROFILE_PATH="$REPO_PATH/engine/src/out/host_profile"
+readonly GN="$REPO_PATH/engine/src/flutter/tools/gn"
+readonly LICENSE_CPP="$PROFILE_PATH/licenses_cpp"
+
+readonly WORKING_DIR="$REPO_PATH/engine/src"
+
+readonly LICENSES_PATH="$REPO_PATH/engine/src/flutter/sky/packages/sky_engine/LICENSE"
+
+readonly DATA_PATH="$REPO_PATH/engine/src/flutter/tools/licenses_cpp/data"
+
+printf 'Repository path: %s\n' "$REPO_PATH"
+
+###############################################################################
+# Temporary Workspace
+###############################################################################
+
+TMP_DIR="$(mktemp -d)"
+readonly TMP_DIR
+
+printf 'Temporary directory: %s\n' "$TMP_DIR"
+
+###############################################################################
+# Dependency Validation
+###############################################################################
+
+require_cmd python3
+require_cmd gclient
+require_cmd ninja
+
+###############################################################################
+# Filesystem Validation
+###############################################################################
+
+if [[ ! -x "$GN" ]]; then
+  _err "$LINENO" \
+    "GN wrapper not found or not executable: $GN"
+  exit 3
+fi
+
+if [[ ! -d "$WORKING_DIR" ]]
