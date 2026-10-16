@@ -2,48 +2,64 @@
   "name": "awesome-proton",
   "version": "1.0.0",
   "description": "List of games tested with Proton (Tool for Steam Client on Linux)",
-  "main": "build.js",
-  "scripts": {
-    "build": "node build.js",
-    "start": "node build.js",
-    "test": "echo \"No tests specified\" && exit 0",
-    "lint": "eslint . --ext .js",
-    "format": "prettier --write ."
+  "license": "CC0-1.0",
+  "author": {
+    "name": "Tiago Danin",
+    "url": "https://github.com/TiagoDanin"
   },
+  "homepage": "https://github.com/TiagoDanin/Awesome-Proton#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TiagoDanin/Awesome-Proton.git"
+    "url": "https://github.com/TiagoDanin/Awesome-Proton.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TiagoDanin/Awesome-Proton/issues"
   },
   "keywords": [
     "proton",
+    "steam",
+    "linux",
+    "gaming",
     "awesome",
     "awesome-list",
-    "steam",
-    "games",
-    "list"
+    "wine",
+    "compatibility",
+    "steam-play"
   ],
-  "author": "Tiago Danin",
-  "license": "CC0-1.0",
-  "bugs": {
-    "url": "https://github.com/TiagoDanin/Awesome-Proton/"
-  },
-  "homepage": "https://github.com/TiagoDanin/Awesome-Proton#readme",
-  "engines": {
-    "node": ">=16"
-  },
+  "type": "commonjs",
+  "main": "build.js",
   "files": [
     "build.js",
-    "dist",
-    "src"
+    "src",
+    "dist"
   ],
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "packageManager": "npm@10",
+  "scripts": {
+    "build": "node build.js",
+    "start": "node build.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run test",
+    "ci": "npm run format:check && npm run lint && npm run test && npm run build",
+    "audit": "npm audit",
+    "audit:fix": "npm audit fix"
+  },
   "dependencies": {
-    "chokidar": "^3.4.2",
-    "load-json-file": "^6.2.0",
+    "chokidar": "^4.0.0",
+    "load-json-file": "^7.0.1",
     "mustache": "^4.2.0"
   },
   "devDependencies": {
-    "eslint": "^8.0.0",
-    "prettier": "^2.8.0",
-    "jest": "^29.0.0"
+    "eslint": "^9.37.0",
+    "jest": "^30.2.0",
+    "prettier": "^3.6.2"
   }
 }
