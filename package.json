@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+###############################################################################
+# Strict Mode
+###############################################################################
+
+set -Eeuo pipefail
 
 ###############################################################################
 # Error Handling
@@ -8,8 +12,37 @@ set -euo pipefail
 
 _err() {
   local lineno="$1"
-  shift
-  printf 'ERROR [%s\]: %s\n' "$lineno" "$*" >&2
+  local exit_code="$2"
+  local command="$3"
+
+  printf \
+    'ERROR [line=%s] [exit=%s]: %s\n' \
+    "$lineno" \
+    "$exit_code" \
+    "$command" >&2
+}
+
+_stacktrace() {
+  local i
+
+  printf 'Stack trace:\n' >&2
+
+  for ((i=1; i<${#FUNCNAME[@]}; i++)); do
+    printf \
+      '  at %s() [%s:%s]\n' \
+      "${FUNCNAME[$i]}" \
+      "${BASH_SOURCE[$i]}" \
+      "${BASH_LINENO[$((i-1))]}" >&2
+  done
+}
+
+error_handler() {
+  local exit_code=$?
+  local line_no="$1"
+  local command="$2"
+
+  _err "$line_no" "$exit_code" "$command"
+  _stacktrace
 }
 
 ###############################################################################
@@ -20,25 +53,27 @@ _cleanup_ran=0
 
 cleanup() {
   (( _cleanup_ran )) && return
+
   _cleanup_ran=1
 
   printf 'Cleaning up...\n' >&2
 
-  # Marker file for automated tests.
   if [[ -n "${TEST_MARKER_FILE:-}" ]]; then
-    touch "$TEST_MARKER_FILE"
+    touch -- "$TEST_MARKER_FILE"
   fi
 
-  # Remove temporary directory.
   if [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR}" ]]; then
     rm -rf -- "$TMP_DIR"
   fi
 
-  # Safely unwind directory stack.
   while popd >/dev/null 2>&1; do
     :
   done
 }
+
+###############################################################################
+# Signal Handlers
+###############################################################################
 
 on_interrupt() {
   local signal="$1"
@@ -60,7 +95,7 @@ on_interrupt() {
   esac
 }
 
-trap '_err "$LINENO" "Command failed: $BASH_COMMAND"' ERR
+trap 'error_handler "$LINENO" "$BASH_COMMAND"' ERR
 trap 'on_interrupt SIGINT' INT
 trap 'on_interrupt SIGTERM' TERM
 trap cleanup EXIT
@@ -70,24 +105,24 @@ trap cleanup EXIT
 ###############################################################################
 
 resolve_path() {
-  local p="$1"
+  local path="$1"
 
   if command -v realpath >/dev/null 2>&1; then
-    realpath "$p"
+    realpath "$path"
     return
   fi
 
   if command -v readlink >/dev/null 2>&1; then
     local resolved
 
-    if resolved="$(readlink -f "$p" 2>/dev/null)"; then
+    if resolved="$(readlink -f "$path" 2>/dev/null)"; then
       printf '%s\n' "$resolved"
       return
     fi
   fi
 
   if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY' "$p"
+    python3 - "$path" <<'PY'
 import os
 import sys
 print(os.path.realpath(sys.argv[1]))
@@ -95,17 +130,44 @@ PY
     return
   fi
 
-  _err "$LINENO" "Unable to resolve path '$p'"
+  printf 'Unable to resolve path: %s\n' "$path" >&2
   return 1
 }
 
 require_cmd() {
   local cmd="$1"
 
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    _err "$LINENO" "Required command '$cmd' not found in PATH."
+  command -v "$cmd" >/dev/null 2>&1 || {
+    printf 'Required command not found: %s\n' "$cmd" >&2
     exit 2
-  fi
+  }
+}
+
+require_file() {
+  local file="$1"
+
+  [[ -f "$file" ]] || {
+    printf 'Required file not found: %s\n' "$file" >&2
+    exit 3
+  }
+}
+
+require_executable() {
+  local file="$1"
+
+  [[ -x "$file" ]] || {
+    printf 'File not executable: %s\n' "$file" >&2
+    exit 3
+  }
+}
+
+require_directory() {
+  local dir="$1"
+
+  [[ -d "$dir" ]] || {
+    printf 'Directory not found: %s\n' "$dir" >&2
+    exit 4
+  }
 }
 
 require_writable_parent() {
@@ -114,19 +176,19 @@ require_writable_parent() {
 
   parent="$(dirname "$path")"
 
-  if [[ ! -d "$parent" ]]; then
-    _err "$LINENO" "Parent directory does not exist: $parent"
+  [[ -d "$parent" ]] || {
+    printf 'Parent directory does not exist: %s\n' "$parent" >&2
     exit 7
-  fi
+  }
 
-  if [[ ! -w "$parent" ]]; then
-    _err "$LINENO" "Directory is not writable: $parent"
+  [[ -w "$parent" ]] || {
+    printf 'Parent directory not writable: %s\n' "$parent" >&2
     exit 7
-  fi
+  }
 }
 
 ###############################################################################
-# Paths
+# Repository Paths
 ###############################################################################
 
 readonly REPO_PATH="$(dirname "$(resolve_path "$0")")"
@@ -164,10 +226,34 @@ require_cmd ninja
 # Filesystem Validation
 ###############################################################################
 
-if [[ ! -x "$GN" ]]; then
-  _err "$LINENO" \
-    "GN wrapper not found or not executable: $GN"
-  exit 3
-fi
+require_executable "$GN"
+require_directory "$WORKING_DIR"
 
-if [[ ! -d "$WORKING_DIR" ]]
+###############################################################################
+# Main
+###############################################################################
+
+main() {
+  printf 'Starting build steps...\n'
+
+  pushd "$WORKING_DIR" >/dev/null
+
+  printf 'Running gclient sync...\n'
+  gclient sync
+
+  printf 'Generating GN files...\n'
+  "$GN" --unoptimized
+
+  printf 'Building target...\n'
+  ninja -C "$PROFILE_PATH" licenses_cpp
+
+  printf 'Checking generated binary...\n'
+  require_file "$LICENSE_CPP"
+
+  printf 'Running licenses generation...\n'
+  "$LICENSE_CPP"
+
+  printf 'Done.\n'
+}
+
+main "$@"
