@@ -1,259 +1,196 @@
+
 #!/usr/bin/env bash
 
-###############################################################################
-# Strict Mode
-###############################################################################
-
 set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
 
-###############################################################################
-# Error Handling
-###############################################################################
+_CLEANUP_RAN=0
+_TMP_DIR=""
 
-_err() {
-  local lineno="$1"
-  local exit_code="$2"
-  local command="$3"
-
-  printf \
-    'ERROR [line=%s] [exit=%s]: %s\n' \
-    "$lineno" \
-    "$exit_code" \
-    "$command" >&2
+log() {
+  printf '[INFO] %s\n' "$*"
 }
 
-_stacktrace() {
-  local i
-
-  printf 'Stack trace:\n' >&2
-
-  for ((i=1; i<${#FUNCNAME[@]}; i++)); do
-    printf \
-      '  at %s() [%s:%s]\n' \
-      "${FUNCNAME[$i]}" \
-      "${BASH_SOURCE[$i]}" \
-      "${BASH_LINENO[$((i-1))]}" >&2
-  done
+error() {
+  printf '[ERROR] %s\n' "$*" >&2
 }
 
 error_handler() {
-  local exit_code=$?
-  local line_no="$1"
-  local command="$2"
+  local exit_code="$1"
+  local line_no="$2"
+  local command="$3"
 
-  _err "$line_no" "$exit_code" "$command"
-  _stacktrace
+  trap - ERR
+
+  error "Linha=$line_no | Código=$exit_code | Comando=$command"
+  exit "$exit_code"
 }
-
-###############################################################################
-# Cleanup
-###############################################################################
-
-_cleanup_ran=0
 
 cleanup() {
-  (( _cleanup_ran )) && return
+  local status="${1:-0}"
 
-  _cleanup_ran=1
+  if (( _CLEANUP_RAN != 0 )); then
+    return 0
+  fi
 
-  printf 'Cleaning up...\n' >&2
+  _CLEANUP_RAN=1
+  trap - EXIT ERR INT TERM
 
   if [[ -n "${TEST_MARKER_FILE:-}" ]]; then
-    touch -- "$TEST_MARKER_FILE"
+    touch -- "$TEST_MARKER_FILE" || {
+      error "Falha ao criar marcador de teste."
+      (( status == 0 )) && status=1
+    }
   fi
 
-  if [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR}" ]]; then
-    rm -rf -- "$TMP_DIR"
+  if [[ -n "$_TMP_DIR" && -d "$_TMP_DIR" ]]; then
+    rm -rf -- "$_TMP_DIR" || {
+      error "Falha ao remover diretório temporário."
+      (( status == 0 )) && status=1
+    }
   fi
 
-  while popd >/dev/null 2>&1; do
-    :
-  done
+  _TMP_DIR=""
+  log "Limpeza concluída."
+
+  return "$status"
 }
 
-###############################################################################
-# Signal Handlers
-###############################################################################
+on_exit() {
+  local status="$?"
 
-on_interrupt() {
-  local signal="$1"
+  if cleanup "$status"; then
+    exit "$status"
+  else
+    local cleanup_status="$?"
+    exit "$cleanup_status"
+  fi
+}
 
-  printf '\nReceived %s. Aborting...\n' "$signal" >&2
-
-  cleanup
-
-  case "$signal" in
-    SIGINT)
-      exit 130
-      ;;
-    SIGTERM)
-      exit 143
-      ;;
-    *)
-      exit 1
-      ;;
+on_signal() {
+  case "$1" in
+    INT)  exit 130 ;;
+    TERM) exit 143 ;;
+    *)    exit 1 ;;
   esac
 }
 
-trap 'error_handler "$LINENO" "$BASH_COMMAND"' ERR
-trap 'on_interrupt SIGINT' INT
-trap 'on_interrupt SIGTERM' TERM
-trap cleanup EXIT
-
-###############################################################################
-# Utility Functions
-###############################################################################
+trap 'error_handler "$?" "$LINENO" "$BASH_COMMAND"' ERR
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+trap on_exit EXIT
 
 resolve_path() {
   local path="$1"
 
   if command -v realpath >/dev/null 2>&1; then
-    realpath "$path"
-    return
+    realpath -- "$path"
+  elif command -v readlink >/dev/null 2>&1; then
+    readlink -f -- "$path"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$path"
+  else
+    error "Não foi possível resolver: $path"
+    return 1
   fi
-
-  if command -v readlink >/dev/null 2>&1; then
-    local resolved
-
-    if resolved="$(readlink -f "$path" 2>/dev/null)"; then
-      printf '%s\n' "$resolved"
-      return
-    fi
-  fi
-
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$path" <<'PY'
-import os
-import sys
-print(os.path.realpath(sys.argv[1]))
-PY
-    return
-  fi
-
-  printf 'Unable to resolve path: %s\n' "$path" >&2
-  return 1
 }
 
 require_cmd() {
-  local cmd="$1"
-
-  command -v "$cmd" >/dev/null 2>&1 || {
-    printf 'Required command not found: %s\n' "$cmd" >&2
-    exit 2
+  command -v "$1" >/dev/null 2>&1 || {
+    error "Comando não encontrado: $1"
+    return 2
   }
 }
 
 require_file() {
-  local file="$1"
-
-  [[ -f "$file" ]] || {
-    printf 'Required file not found: %s\n' "$file" >&2
-    exit 3
+  [[ -f "$1" ]] || {
+    error "Arquivo não encontrado: $1"
+    return 3
   }
 }
 
 require_executable() {
-  local file="$1"
-
-  [[ -x "$file" ]] || {
-    printf 'File not executable: %s\n' "$file" >&2
-    exit 3
+  [[ -f "$1" && -x "$1" ]] || {
+    error "Executável inválido ou ausente: $1"
+    return 3
   }
 }
 
 require_directory() {
-  local dir="$1"
-
-  [[ -d "$dir" ]] || {
-    printf 'Directory not found: %s\n' "$dir" >&2
-    exit 4
+  [[ -d "$1" ]] || {
+    error "Diretório não encontrado: $1"
+    return 4
   }
 }
 
-require_writable_parent() {
-  local path="$1"
-  local parent
+initialize_paths() {
+  SCRIPT_PATH="$(resolve_path "$0")"
+  REPO_PATH="$(dirname -- "$SCRIPT_PATH")"
 
-  parent="$(dirname "$path")"
+  PROFILE_PATH="$REPO_PATH/engine/src/out/host_profile"
+  GN="$REPO_PATH/engine/src/flutter/tools/gn"
+  LICENSE_CPP="$PROFILE_PATH/licenses_cpp"
+  WORKING_DIR="$REPO_PATH/engine/src"
 
-  [[ -d "$parent" ]] || {
-    printf 'Parent directory does not exist: %s\n' "$parent" >&2
-    exit 7
-  }
+  LICENSES_PATH="$REPO_PATH/engine/src/flutter/sky/packages/sky_engine/LICENSE"
+  DATA_PATH="$REPO_PATH/engine/src/flutter/tools/licenses_cpp/data"
 
-  [[ -w "$parent" ]] || {
-    printf 'Parent directory not writable: %s\n' "$parent" >&2
-    exit 7
-  }
+  readonly SCRIPT_PATH REPO_PATH PROFILE_PATH GN LICENSE_CPP
+  readonly WORKING_DIR LICENSES_PATH DATA_PATH
 }
 
-###############################################################################
-# Repository Paths
-###############################################################################
+validate_dependencies() {
+  require_cmd python3
+  require_cmd gclient
+  require_cmd ninja
 
-readonly REPO_PATH="$(dirname "$(resolve_path "$0")")"
+  require_executable "$GN"
+  require_directory "$WORKING_DIR"
+}
 
-readonly PROFILE_PATH="$REPO_PATH/engine/src/out/host_profile"
-readonly GN="$REPO_PATH/engine/src/flutter/tools/gn"
-readonly LICENSE_CPP="$PROFILE_PATH/licenses_cpp"
+create_workspace() {
+  _TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/licenses-cpp.XXXXXXXX")"
+  log "Workspace temporário: $_TMP_DIR"
+}
 
-readonly WORKING_DIR="$REPO_PATH/engine/src"
+sync_dependencies() {
+  log "Sincronizando dependências."
+  gclient sync
+}
 
-readonly LICENSES_PATH="$REPO_PATH/engine/src/flutter/sky/packages/sky_engine/LICENSE"
+generate_build_files() {
+  log "Gerando arquivos GN."
+  "$GN" --unoptimized
+}
 
-readonly DATA_PATH="$REPO_PATH/engine/src/flutter/tools/licenses_cpp/data"
+build_license_generator() {
+  log "Compilando licenses_cpp."
+  ninja -C "$PROFILE_PATH" licenses_cpp
+  require_executable "$LICENSE_CPP"
+}
 
-printf 'Repository path: %s\n' "$REPO_PATH"
-
-###############################################################################
-# Temporary Workspace
-###############################################################################
-
-TMP_DIR="$(mktemp -d)"
-readonly TMP_DIR
-
-printf 'Temporary directory: %s\n' "$TMP_DIR"
-
-###############################################################################
-# Dependency Validation
-###############################################################################
-
-require_cmd python3
-require_cmd gclient
-require_cmd ninja
-
-###############################################################################
-# Filesystem Validation
-###############################################################################
-
-require_executable "$GN"
-require_directory "$WORKING_DIR"
-
-###############################################################################
-# Main
-###############################################################################
+run_license_generator() {
+  log "Executando gerador de licenças."
+  "$LICENSE_CPP"
+}
 
 main() {
-  printf 'Starting build steps...\n'
+  initialize_paths
 
-  pushd "$WORKING_DIR" >/dev/null
+  log "Repositório: $REPO_PATH"
 
-  printf 'Running gclient sync...\n'
-  gclient sync
+  validate_dependencies
+  create_workspace
 
-  printf 'Generating GN files...\n'
-  "$GN" --unoptimized
+  cd -- "$WORKING_DIR"
 
-  printf 'Building target...\n'
-  ninja -C "$PROFILE_PATH" licenses_cpp
+  sync_dependencies
+  generate_build_files
+  build_license_generator
+  run_license_generator
 
-  printf 'Checking generated binary...\n'
-  require_file "$LICENSE_CPP"
-
-  printf 'Running licenses generation...\n'
-  "$LICENSE_CPP"
-
-  printf 'Done.\n'
+  log "Processo concluído."
 }
 
 main "$@"
