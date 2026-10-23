@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
@@ -6,7 +5,6 @@ IFS=$'\n\t'
 umask 077
 
 _CLEANUP_RAN=0
-_TMP_DIR=""
 
 log() {
   printf '[INFO] %s\n' "$*"
@@ -35,6 +33,7 @@ cleanup() {
   fi
 
   _CLEANUP_RAN=1
+
   trap - EXIT ERR INT TERM
 
   if [[ -n "${TEST_MARKER_FILE:-}" ]]; then
@@ -44,16 +43,7 @@ cleanup() {
     }
   fi
 
-  if [[ -n "$_TMP_DIR" && -d "$_TMP_DIR" ]]; then
-    rm -rf -- "$_TMP_DIR" || {
-      error "Falha ao remover diretório temporário."
-      (( status == 0 )) && status=1
-    }
-  fi
-
-  _TMP_DIR=""
   log "Limpeza concluída."
-
   return "$status"
 }
 
@@ -70,9 +60,9 @@ on_exit() {
 
 on_signal() {
   case "$1" in
-    INT)  exit 130 ;;
+    INT) exit 130 ;;
     TERM) exit 143 ;;
-    *)    exit 1 ;;
+    *) exit 1 ;;
   esac
 }
 
@@ -86,7 +76,7 @@ resolve_path() {
 
   if command -v realpath >/dev/null 2>&1; then
     realpath -- "$path"
-  elif command -v readlink >/dev/null 2>&1; then
+  elif command -v readlink >/dev/null 2>&1 && readlink -f / >/dev/null 2>&1; then
     readlink -f -- "$path"
   elif command -v python3 >/dev/null 2>&1; then
     python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$path"
@@ -125,19 +115,30 @@ require_directory() {
 }
 
 initialize_paths() {
-  SCRIPT_PATH="$(resolve_path "$0")"
-  REPO_PATH="$(dirname -- "$SCRIPT_PATH")"
+  local script_path
+  local script_dir
+  local repo_path
 
-  PROFILE_PATH="$REPO_PATH/engine/src/out/host_profile"
-  GN="$REPO_PATH/engine/src/flutter/tools/gn"
-  LICENSE_CPP="$PROFILE_PATH/licenses_cpp"
-  WORKING_DIR="$REPO_PATH/engine/src"
+  script_path="$(resolve_path "$0")"
+  script_dir="$(dirname -- "$script_path")"
 
-  LICENSES_PATH="$REPO_PATH/engine/src/flutter/sky/packages/sky_engine/LICENSE"
-  DATA_PATH="$REPO_PATH/engine/src/flutter/tools/licenses_cpp/data"
+  if command -v git >/dev/null 2>&1 &&
+     git -C "$script_dir" rev-parse --show-toplevel >/dev/null 2>&1; then
+    repo_path="$(git -C "$script_dir" rev-parse --show-toplevel)"
+  else
+    repo_path="$(cd "$script_dir" && pwd -P)"
+  fi
 
-  readonly SCRIPT_PATH REPO_PATH PROFILE_PATH GN LICENSE_CPP
-  readonly WORKING_DIR LICENSES_PATH DATA_PATH
+  readonly SCRIPT_PATH="$script_path"
+  readonly REPO_PATH="$repo_path"
+
+  readonly PROFILE_PATH="$REPO_PATH/engine/src/out/host_profile"
+  readonly GN="$REPO_PATH/engine/src/flutter/tools/gn"
+  readonly LICENSE_CPP="$PROFILE_PATH/licenses_cpp"
+  readonly WORKING_DIR="$REPO_PATH/engine/src"
+
+  readonly LICENSES_PATH="$REPO_PATH/engine/src/flutter/sky/packages/sky_engine/LICENSE"
+  readonly DATA_PATH="$REPO_PATH/engine/src/flutter/tools/licenses_cpp/data"
 }
 
 validate_dependencies() {
@@ -146,17 +147,17 @@ validate_dependencies() {
   require_cmd ninja
 
   require_executable "$GN"
-  require_directory "$WORKING_DIR"
-}
 
-create_workspace() {
-  _TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/licenses-cpp.XXXXXXXX")"
-  log "Workspace temporário: $_TMP_DIR"
+  require_directory "$WORKING_DIR"
+  require_directory "$PROFILE_PATH"
+  require_directory "$DATA_PATH"
+
+  require_file "$LICENSES_PATH"
 }
 
 sync_dependencies() {
   log "Sincronizando dependências."
-  gclient sync
+  gclient sync --verbose
 }
 
 generate_build_files() {
@@ -167,6 +168,7 @@ generate_build_files() {
 build_license_generator() {
   log "Compilando licenses_cpp."
   ninja -C "$PROFILE_PATH" licenses_cpp
+
   require_executable "$LICENSE_CPP"
 }
 
@@ -181,7 +183,6 @@ main() {
   log "Repositório: $REPO_PATH"
 
   validate_dependencies
-  create_workspace
 
   cd -- "$WORKING_DIR"
 
