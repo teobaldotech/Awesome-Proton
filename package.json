@@ -1,32 +1,27 @@
 {
-  "name": "awesome-proton",
+  "name": "meu-projeto",
   "version": "1.0.0",
-  "description": "List of games tested with Proton (Tool for Steam Client on Linux)",
-  "main": "build.js",
+  "description": "Projeto Node.js usando chokidar, load-json-file e mustache",
+  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "build": "node build.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/TiagoDanin/Awesome-Proton.git"
+    "start": "node index.js",
+    "dev": "node index.js"
   },
   "keywords": [
-    "proton",
-    "awesome",
-    "awesome-list",
-    "steam",
-    "games",
-    "list"
+    "nodejs",
+    "chokidar",
+    "mustache",
+    "json"
   ],
-  "author": "Tiago Danin",
-  "license": "CC0-1.0",
-  "bugs": {
-    "url": "https://github.com/TiagoDanin/Awesome-Proton/"
-  },
-  "homepage": "https://github.com/TiagoDanin/Awesome-Proton#readme",
+  "author": "",
+  "license": "MIT",
   "dependencies": {
-    "chokidar": "^3.4.2",
-    "load-json-file": "^6.2.0",
+    "chokidar": "^5.0.0",
+    "load-json-file": "^7.0.1",
     "mustache": "^4.2.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
